@@ -9,6 +9,9 @@ def main():
         print("[ERROR] 카메라를 열 수 없습니다.")
         return
 
+    prev_target_area = None
+    target_area_history = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -57,6 +60,27 @@ def main():
         if len(persons) > 0:
             target_index = max(range(len(persons)), key=lambda i: persons[i]["score"])
 
+        target_motion = "UNKNOWN"
+
+        if target_index is not None:
+            current_area = persons[target_index]["area"]
+            target_area_history.append(current_area)
+
+            if len(target_area_history) > 10:
+                old_area = target_area_history[-10]
+                diff_ratio = (current_area - old_area) / old_area
+
+                if diff_ratio > 0.03:
+                    target_motion = "APPROACHING"
+                elif diff_ratio < -0.03:
+                    target_motion = "LEAVING"
+                else:
+                    target_motion = "STABLE"
+
+            if len(target_area_history) > 30:
+                target_area_history.pop(0)
+        else:
+            target_area_history.clear()
         # 가까운 사람 상위 N명 선정
         MAX_MOTION_PERSONS = 3
 
@@ -73,7 +97,7 @@ def main():
 
             if i == target_index:
                 color = (0, 0, 255)
-                label = "TARGET"
+                label = f"TARGET / {target_motion}"
                 thickness = 3
 
             elif i in near_indices:
