@@ -1,7 +1,7 @@
 import cv2
-from ultralytics import YOLO
 import time
 import mediapipe as mp
+from ultralytics import YOLO
 
 
 def main():
@@ -12,11 +12,22 @@ def main():
         static_image_mode=False,
         model_complexity=1,
         enable_segmentation=False,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        smooth_landmarks=True,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.7
     )
 
-    mp_drawing = mp.solutions.drawing_utils
+    BODY_CONNECTIONS = [
+        (11, 12),
+        (11, 13), (13, 15),
+        (12, 14), (14, 16),
+        (11, 23), (12, 24),
+        (23, 24),
+        (23, 25), (25, 27),
+        (24, 26), (26, 28),
+    ]
+
+    BODY_LANDMARKS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
     cap = cv2.VideoCapture(0)
 
@@ -27,10 +38,10 @@ def main():
     target_area_history = []
     motion_history = []
     prev_target_center = None
+
     smoothed_target_box = None
     smoothed_target_body_box = None
     SMOOTHING_ALPHA = 0.7
-
 
     MOTION_HISTORY_SIZE = 5
     MAX_MOTION_PERSONS = 3
@@ -42,8 +53,6 @@ def main():
 
     prev_time = time.time()
 
-
-
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -54,7 +63,6 @@ def main():
         center_x = width // 2
 
         results = model(frame, verbose=False)
-
         persons = []
 
         # 1. 사람 후보 수집
@@ -62,7 +70,6 @@ def main():
             for box in result.boxes:
                 cls_id = int(box.cls[0])
 
-                # COCO person class
                 if cls_id != 0:
                     continue
 
@@ -76,7 +83,7 @@ def main():
                 if area < MIN_PERSON_AREA:
                     continue
 
-                # 얼굴~몸통 중심 영역 계산
+                # 얼굴~몸통 중심 영역
                 body_x1 = x1 + int(box_width * 0.2)
                 body_x2 = x2 - int(box_width * 0.2)
                 body_y1 = y1 + int(box_height * 0.15)
@@ -89,7 +96,6 @@ def main():
                 body_center_x = (body_x1 + body_x2) // 2
                 dist_from_center = abs(body_center_x - center_x)
 
-                # 타겟 선정 점수: 몸통 영역 기준
                 score = body_area - dist_from_center * 5
 
                 persons.append({
@@ -101,7 +107,7 @@ def main():
                     "score": score
                 })
 
-        # 2. 이전 타겟과 가까운 후보에게 유지 보너스
+        # 2. 이전 타겟 유지 보너스
         if prev_target_center is not None:
             prev_cx, prev_cy = prev_target_center
 
@@ -132,7 +138,7 @@ def main():
             target_area_history.clear()
             motion_history.clear()
 
-        # 4. 가까운 인물 상위 N명 선정
+        # 4. 가까운 인물 상위 N명
         near_indices = sorted(
             range(len(persons)),
             key=lambda i: persons[i]["area"],
@@ -167,8 +173,7 @@ def main():
             if len(target_area_history) > 30:
                 target_area_history.pop(0)
 
-
-        # 박스 움직임 안정화
+        # 6. TARGET 박스 smoothing
         display_target_box = None
         display_target_body_box = None
 
@@ -199,23 +204,24 @@ def main():
             smoothed_target_box = None
             smoothed_target_body_box = None
 
-        # 6. 화면 출력
+        # 7. 화면 출력
         for i, person in enumerate(persons):
             x1, y1, x2, y2 = person["box"]
-
-            if i == target_index and display_target_box is not None:
-                x1, y1, x2, y2 = display_target_box
-
-            if display_target_body_box is not None:
-                bx1, by1, bx2, by2 = display_target_body_box
+            bx1, by1, bx2, by2 = person["body_box"]
 
             if i == target_index:
+                if display_target_box is not None:
+                    x1, y1, x2, y2 = display_target_box
+
+                if display_target_body_box is not None:
+                    bx1, by1, bx2, by2 = display_target_body_box
+
                 if target_motion == "APPROACHING":
-                    color = (0, 0, 255)      # red
+                    color = (0, 0, 255)
                 elif target_motion == "LEAVING":
-                    color = (0, 255, 255)    # yellow
+                    color = (0, 255, 255)
                 else:
-                    color = (0, 255, 0)      # green
+                    color = (0, 255, 0)
 
                 label = f"TARGET / {target_motion}"
                 thickness = 3
@@ -230,14 +236,14 @@ def main():
                 label = "PERSON"
                 thickness = 1
 
-            # 전체 사람 박스
+            # 사람 박스
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-            # 디버깅용 몸통 박스
+            # 몸통 기준 박스
             cv2.rectangle(frame, (bx1, by1), (bx2, by2), (255, 255, 255), 1)
 
             if i == target_index:
-                # HUD 텍스트 배경
+                # HUD 텍스트
                 cv2.rectangle(
                     frame,
                     (x1, max(y1 - 35, 0)),
@@ -256,6 +262,40 @@ def main():
                     2
                 )
 
+                # TARGET에게만 skeleton 표시
+                roi_x1 = max(x1, 0)
+                roi_y1 = max(y1, 0)
+                roi_x2 = min(x2, width)
+                roi_y2 = min(y2, height)
+
+                target_roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+
+                if target_roi.size > 0:
+                    target_rgb = cv2.cvtColor(target_roi, cv2.COLOR_BGR2RGB)
+                    pose_result = pose.process(target_rgb)
+
+                    if pose_result.pose_landmarks:
+                        landmarks = pose_result.pose_landmarks.landmark
+                        roi_w = roi_x2 - roi_x1
+                        roi_h = roi_y2 - roi_y1
+
+                        for start_idx, end_idx in BODY_CONNECTIONS:
+                            start = landmarks[start_idx]
+                            end = landmarks[end_idx]
+
+                            sx = int(roi_x1 + start.x * roi_w)
+                            sy = int(roi_y1 + start.y * roi_h)
+                            ex = int(roi_x1 + end.x * roi_w)
+                            ey = int(roi_y1 + end.y * roi_h)
+
+                            cv2.line(frame, (sx, sy), (ex, ey), (255, 255, 255), 2)
+
+                        for idx in BODY_LANDMARKS:
+                            lm = landmarks[idx]
+                            px = int(roi_x1 + lm.x * roi_w)
+                            py = int(roi_y1 + lm.y * roi_h)
+                            cv2.circle(frame, (px, py), 3, (255, 255, 255), -1)
+
             else:
                 cv2.putText(
                     frame,
@@ -267,40 +307,12 @@ def main():
                     2
                 )
 
-            target_roi = frame[y1:y2, x1:x2]
-
-            if target_roi.size > 0:
-                target_rgb = cv2.cvtColor(target_roi, cv2.COLOR_BGR2RGB)
-                pose_result = pose.process(target_rgb)
-
-                if pose_result.pose_landmarks:
-                    for connection in mp_pose.POSE_CONNECTIONS:
-                        start_idx, end_idx = connection
-
-                        start = pose_result.pose_landmarks.landmark[start_idx]
-                        end = pose_result.pose_landmarks.landmark[end_idx]
-
-                        sx = int(x1 + start.x * (x2 - x1))
-                        sy = int(y1 + start.y * (y2 - y1))
-                        ex = int(x1 + end.x * (x2 - x1))
-                        ey = int(y1 + end.y * (y2 - y1))
-
-                        cv2.line(frame, (sx, sy), (ex, ey), (255, 255, 255), 2)
-
-                    for lm in pose_result.pose_landmarks.landmark:
-                        px = int(x1 + lm.x * (x2 - x1))
-                        py = int(y1 + lm.y * (y2 - y1))
-                        cv2.circle(frame, (px, py), 3, (255, 255, 255), -1)
-
-
-        # 중앙선 표시
+        # 중앙선
         cv2.line(frame, (center_x, 0), (center_x, height), (255, 255, 255), 1)
 
-        # 초당 프레임 출력
+        # FPS
         current_time = time.time()
-
-        fps = 1 / (current_time - prev_time)
-
+        fps = 1 / max(current_time - prev_time, 1e-6)
         prev_time = current_time
 
         cv2.putText(
@@ -312,7 +324,6 @@ def main():
             (255, 255, 255),
             2
         )
-
 
         cv2.imshow("Threat Detection System", frame)
 
