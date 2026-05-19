@@ -1,6 +1,6 @@
 import cv2
 from ultralytics import YOLO
-
+import time
 
 def main():
     model = YOLO("yolov8n.pt")
@@ -13,6 +13,10 @@ def main():
     target_area_history = []
     motion_history = []
     prev_target_center = None
+    smoothed_target_box = None
+    smoothed_target_body_box = None
+    SMOOTHING_ALPHA = 0.7
+
 
     MOTION_HISTORY_SIZE = 5
     MAX_MOTION_PERSONS = 3
@@ -21,6 +25,10 @@ def main():
     CENTER_KEEP_THRESHOLD = 100
 
     MIN_PERSON_AREA = 20000
+
+    prev_time = time.time()
+
+
 
     while True:
         ret, frame = cap.read()
@@ -145,10 +153,47 @@ def main():
             if len(target_area_history) > 30:
                 target_area_history.pop(0)
 
+
+        # 박스 움직임 안정화
+        display_target_box = None
+        display_target_body_box = None
+
+        if target_index is not None:
+            current_box = persons[target_index]["box"]
+            current_body_box = persons[target_index]["body_box"]
+
+            if smoothed_target_box is None:
+                smoothed_target_box = current_box
+            else:
+                smoothed_target_box = tuple(
+                    int(SMOOTHING_ALPHA * smoothed_target_box[j] + (1 - SMOOTHING_ALPHA) * current_box[j])
+                    for j in range(4)
+                )
+
+            if smoothed_target_body_box is None:
+                smoothed_target_body_box = current_body_box
+            else:
+                smoothed_target_body_box = tuple(
+                    int(SMOOTHING_ALPHA * smoothed_target_body_box[j] + (1 - SMOOTHING_ALPHA) * current_body_box[j])
+                    for j in range(4)
+                )
+
+            display_target_box = smoothed_target_box
+            display_target_body_box = smoothed_target_body_box
+
+        else:
+            smoothed_target_box = None
+            smoothed_target_body_box = None
+
         # 6. 화면 출력
         for i, person in enumerate(persons):
             x1, y1, x2, y2 = person["box"]
-            bx1, by1, bx2, by2 = person["body_box"]
+
+            if i == target_index and display_target_box is not None:
+                x1, y1, x2, y2 = display_target_box
+
+            if display_target_body_box is not None:
+                bx1, by1, bx2, by2 = display_target_body_box
 
             if i == target_index:
                 if target_motion == "APPROACHING":
@@ -208,8 +253,27 @@ def main():
                     2
                 )
 
+
         # 중앙선 표시
         cv2.line(frame, (center_x, 0), (center_x, height), (255, 255, 255), 1)
+
+        # 초당 프레임 출력
+        current_time = time.time()
+
+        fps = 1 / (current_time - prev_time)
+
+        prev_time = current_time
+
+        cv2.putText(
+            frame,
+            f"FPS: {fps:.1f}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (255, 255, 255),
+            2
+        )
+
 
         cv2.imshow("Threat Detection System", frame)
 
