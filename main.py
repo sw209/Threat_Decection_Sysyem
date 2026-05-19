@@ -1,9 +1,23 @@
 import cv2
 from ultralytics import YOLO
 import time
+import mediapipe as mp
+
 
 def main():
     model = YOLO("yolov8n.pt")
+
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        enable_segmentation=False,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
+    mp_drawing = mp.solutions.drawing_utils
+
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
@@ -253,6 +267,31 @@ def main():
                     2
                 )
 
+            target_roi = frame[y1:y2, x1:x2]
+
+            if target_roi.size > 0:
+                target_rgb = cv2.cvtColor(target_roi, cv2.COLOR_BGR2RGB)
+                pose_result = pose.process(target_rgb)
+
+                if pose_result.pose_landmarks:
+                    for connection in mp_pose.POSE_CONNECTIONS:
+                        start_idx, end_idx = connection
+
+                        start = pose_result.pose_landmarks.landmark[start_idx]
+                        end = pose_result.pose_landmarks.landmark[end_idx]
+
+                        sx = int(x1 + start.x * (x2 - x1))
+                        sy = int(y1 + start.y * (y2 - y1))
+                        ex = int(x1 + end.x * (x2 - x1))
+                        ey = int(y1 + end.y * (y2 - y1))
+
+                        cv2.line(frame, (sx, sy), (ex, ey), (255, 255, 255), 2)
+
+                    for lm in pose_result.pose_landmarks.landmark:
+                        px = int(x1 + lm.x * (x2 - x1))
+                        py = int(y1 + lm.y * (y2 - y1))
+                        cv2.circle(frame, (px, py), 3, (255, 255, 255), -1)
+
 
         # 중앙선 표시
         cv2.line(frame, (center_x, 0), (center_x, height), (255, 255, 255), 1)
@@ -282,6 +321,7 @@ def main():
             break
 
     cap.release()
+    pose.close()
     cv2.destroyAllWindows()
 
 
