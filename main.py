@@ -5,15 +5,30 @@ import mediapipe as mp
 from ultralytics import YOLO
 
 
-# 두 landmark 사이 거리 계산
 def dist(a, b):
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
 
 
-# 정적인 자세 분석
+def draw_transparent_rect(frame, pt1, pt2, color, alpha=0.35, thickness=-1):
+    overlay = frame.copy()
+    cv2.rectangle(overlay, pt1, pt2, color, thickness)
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+
+def draw_transparent_line(frame, pt1, pt2, color, alpha=0.55, thickness=2):
+    overlay = frame.copy()
+    cv2.line(overlay, pt1, pt2, color, thickness)
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+
+def draw_transparent_circle(frame, center, radius, color, alpha=0.65):
+    overlay = frame.copy()
+    cv2.circle(overlay, center, radius, color, -1)
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+
 def analyze_pose_state(landmarks):
     nose = landmarks[0]
-
     left_shoulder = landmarks[11]
     right_shoulder = landmarks[12]
     left_wrist = landmarks[15]
@@ -39,7 +54,6 @@ def analyze_pose_state(landmarks):
     return "NORMAL"
 
 
-# 손목 이동량 기반 펀치 유사 동작 감지
 def detect_punch_like_motion(wrist_history):
     if len(wrist_history) < 6:
         return False
@@ -47,21 +61,12 @@ def detect_punch_like_motion(wrist_history):
     old_left, old_right = wrist_history[0]
     new_left, new_right = wrist_history[-1]
 
-    left_move = math.sqrt(
-        (new_left[0] - old_left[0]) ** 2 +
-        (new_left[1] - old_left[1]) ** 2
-    )
+    left_move = math.sqrt((new_left[0] - old_left[0]) ** 2 + (new_left[1] - old_left[1]) ** 2)
+    right_move = math.sqrt((new_right[0] - old_right[0]) ** 2 + (new_right[1] - old_right[1]) ** 2)
 
-    right_move = math.sqrt(
-        (new_right[0] - old_right[0]) ** 2 +
-        (new_right[1] - old_right[1]) ** 2
-    )
-
-    # 민감도 조정: 값이 낮을수록 더 쉽게 펀치로 판단
     return max(left_move, right_move) > 0.35
 
 
-# 움직임 + 자세 기반 위험도 점수 계산
 def estimate_threat_score(target_motion, pose_state):
     score = 10
 
@@ -96,7 +101,7 @@ def estimate_threat_score(target_motion, pose_state):
 
     return label, score
 
-# 상황 구분 (평상시, 주의, 교전)
+
 def estimate_system_state(target_motion, pose_state, response_active):
     if response_active:
         return "ENGAGE"
@@ -109,11 +114,10 @@ def estimate_system_state(target_motion, pose_state, response_active):
 
     return "NORMAL"
 
+
 def main():
-    # YOLO 사람 검출 모델
     model = YOLO("yolov8n.pt")
 
-    # MediaPipe Pose 설정
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose(
         static_image_mode=False,
@@ -124,7 +128,6 @@ def main():
         min_tracking_confidence=0.8
     )
 
-    # 얼굴 landmark를 제외한 몸통/팔/다리 연결선
     BODY_CONNECTIONS = [
         (11, 12),
         (11, 13), (13, 15),
@@ -137,21 +140,18 @@ def main():
 
     BODY_LANDMARKS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
-    # OpenCV 색상은 BGR 순서
-    SKELETON_LINE_COLOR = (255, 255, 0)   # 청록
-    SKELETON_DOT_COLOR = (0, 165, 255)    # 주황
-    BODY_BOX_COLOR = (255, 0, 255)        # 보라
-    TEXT_COLOR = (0, 0, 0)                # 검정
-    CENTER_LINE_COLOR = (255, 255, 255)   # 흰색
+    SKELETON_LINE_COLOR = (255, 255, 0)
+    SKELETON_DOT_COLOR = (0, 165, 255)
+    BODY_BOX_COLOR = (255, 0, 255)
+    TEXT_COLOR = (0, 0, 0)
+    CENTER_LINE_COLOR = (255, 255, 255)
 
-    # 카메라 입력
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
         print("[ERROR] 카메라를 열 수 없습니다.")
         return
 
-    # 상태 기록용 변수
     target_area_history = []
     motion_history = []
     pose_history = []
@@ -161,18 +161,15 @@ def main():
     smoothed_target_box = None
     smoothed_target_body_box = None
 
-    # 펀치 감지 후 일정 시간 유지
     punch_alert_until = 0
     PUNCH_ALERT_DURATION = 1.5
 
-    # 공격 감지 후 상태
     response_state_until = 0
     RESPONSE_STATE_DURATION = 3.0
-    ## 공격 상태 이후 회피 감지
+
     leaving_start_time = None
     LEAVING_RELEASE_DURATION = 2.5
 
-    # 설정값
     SMOOTHING_ALPHA = 0.7
     MOTION_HISTORY_SIZE = 5
     POSE_HISTORY_SIZE = 5
@@ -187,6 +184,7 @@ def main():
 
     while True:
         ret, frame = cap.read()
+
         if not ret:
             print("[ERROR] 프레임을 읽을 수 없습니다.")
             break
@@ -197,12 +195,10 @@ def main():
         results = model(frame, verbose=False)
         persons = []
 
-        # 1. 사람 후보 수집
         for result in results:
             for box in result.boxes:
                 cls_id = int(box.cls[0])
 
-                # COCO dataset에서 person class id는 0
                 if cls_id != 0:
                     continue
 
@@ -213,11 +209,9 @@ def main():
                 box_height = y2 - y1
                 area = box_width * box_height
 
-                # 너무 작은 사람은 제외
                 if area < MIN_PERSON_AREA:
                     continue
 
-                # 팔 흔들림 영향을 줄이기 위한 얼굴~몸통 기준 박스
                 body_x1 = x1 + int(box_width * 0.2)
                 body_x2 = x2 - int(box_width * 0.2)
                 body_y1 = y1 + int(box_height * 0.15)
@@ -230,7 +224,6 @@ def main():
                 body_center_x = (body_x1 + body_x2) // 2
                 dist_from_center = abs(body_center_x - center_x)
 
-                # 중앙에 가깝고 몸통 영역이 큰 사람을 우선 타겟으로 선정
                 score = body_area - dist_from_center * 5
 
                 persons.append({
@@ -242,7 +235,6 @@ def main():
                     "score": score
                 })
 
-        # 2. 이전 타겟 근처 후보에게 보너스 부여
         if prev_target_center is not None:
             prev_cx, prev_cy = prev_target_center
 
@@ -256,7 +248,6 @@ def main():
                 if d < CENTER_KEEP_THRESHOLD:
                     person["score"] += TARGET_KEEP_BONUS
 
-        # 3. 메인 타겟 선정
         target_index = None
 
         if len(persons) > 0:
@@ -275,14 +266,12 @@ def main():
             response_state_until = 0
             leaving_start_time = None
 
-        # 4. 가까운 인물 상위 N명 선정
         near_indices = sorted(
             range(len(persons)),
             key=lambda i: persons[i]["area"],
             reverse=True
         )[:MAX_MOTION_PERSONS]
 
-        # 5. 타겟 접근/이탈 분석
         target_motion = "UNKNOWN"
 
         if target_index is not None:
@@ -310,7 +299,6 @@ def main():
             if len(target_area_history) > 30:
                 target_area_history.pop(0)
 
-        # 6. TARGET 박스 smoothing
         display_target_box = None
         display_target_body_box = None
 
@@ -345,7 +333,6 @@ def main():
         target_risk_label = "NORMAL"
         target_risk_score = 0
 
-        # 7. 화면 출력
         for i, person in enumerate(persons):
             x1, y1, x2, y2 = person["box"]
             bx1, by1, bx2, by2 = person["body_box"]
@@ -358,31 +345,29 @@ def main():
                     bx1, by1, bx2, by2 = display_target_body_box
 
                 if target_motion == "APPROACHING":
-                    color = (0, 0, 255)       # 빨강
+                    color = (0, 0, 255)
                 elif target_motion == "LEAVING":
-                    color = (0, 255, 255)     # 노랑
+                    color = (0, 255, 255)
                 else:
-                    color = (0, 255, 0)       # 초록
+                    color = (0, 255, 0)
 
                 label = f"TARGET / {target_motion}"
-                thickness = 3
+                thickness = 2
 
             elif i in near_indices:
                 color = (0, 255, 255)
                 label = "NEAR"
-                thickness = 2
+                thickness = 1
 
             else:
                 color = (0, 255, 0)
                 label = "PERSON"
                 thickness = 1
 
-            # 사람 박스와 몸통 기준 박스
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-            cv2.rectangle(frame, (bx1, by1), (bx2, by2), BODY_BOX_COLOR, 1)
+            draw_transparent_rect(frame, (x1, y1), (x2, y2), color, alpha=0.25, thickness=thickness)
+            draw_transparent_rect(frame, (bx1, by1), (bx2, by2), BODY_BOX_COLOR, alpha=0.28, thickness=1)
 
             if i == target_index:
-                # TARGET에 대해서만 Pose 추정
                 roi_x1 = max(x1, 0)
                 roi_y1 = max(y1, 0)
                 roi_x2 = min(x2, width)
@@ -399,10 +384,8 @@ def main():
                         roi_w = roi_x2 - roi_x1
                         roi_h = roi_y2 - roi_y1
 
-                        # 정적 자세 분석
                         raw_pose_state = analyze_pose_state(landmarks)
 
-                        # 손목 이동 기록
                         left_wrist = landmarks[15]
                         right_wrist = landmarks[16]
 
@@ -416,34 +399,29 @@ def main():
                         if len(wrist_history) > WRIST_HISTORY_SIZE:
                             wrist_history.pop(0)
 
-                        # 펀치 감지 후 일정 시간 유지
                         now = time.time()
 
-                        if raw_pose_state in ["GUARD_POSE", "ARMS_RAISED"] and detect_punch_like_motion(wrist_history):
+                        punch_detected = (
+                            raw_pose_state in ["GUARD_POSE", "ARMS_RAISED"]
+                            and detect_punch_like_motion(wrist_history)
+                        )
+
+                        if punch_detected:
                             punch_alert_until = now + PUNCH_ALERT_DURATION
                             response_state_until = now + RESPONSE_STATE_DURATION
-
-                        now = time.time()
-
-                        if target_motion == "LEAVING":
-                            if leaving_start_time is None:
-                                leaving_start_time = now
-
-                            elif now - leaving_start_time >= LEAVING_RELEASE_DURATION:
-                                response_state_until = 0
-                                leaving_start_time = None
-
-                        else:
-                            leaving_start_time = None
-
-                        if time.time() < response_state_until:
-                            target_risk_label = "RESPONSE"
-                            target_risk_score = max(target_risk_score, 90)
 
                         if now < punch_alert_until:
                             raw_pose_state = "PUNCH_LIKE_MOTION"
 
-                        # 자세 상태 smoothing
+                        if target_motion == "LEAVING":
+                            if leaving_start_time is None:
+                                leaving_start_time = now
+                            elif now - leaving_start_time >= LEAVING_RELEASE_DURATION:
+                                response_state_until = 0
+                                leaving_start_time = None
+                        else:
+                            leaving_start_time = None
+
                         pose_history.append(raw_pose_state)
 
                         if len(pose_history) > POSE_HISTORY_SIZE:
@@ -451,16 +429,11 @@ def main():
 
                         target_pose_state = max(set(pose_history), key=pose_history.count)
 
-                        # 위험도 계산
                         target_risk_label, target_risk_score = estimate_threat_score(
                             target_motion,
                             target_pose_state
                         )
-                        if time.time() < response_state_until:
-                            target_risk_label = "RESPONSE"
-                            target_risk_score = max(target_risk_score, 90)
 
-                        # skeleton 선
                         for start_idx, end_idx in BODY_CONNECTIONS:
                             start = landmarks[start_idx]
                             end = landmarks[end_idx]
@@ -470,22 +443,35 @@ def main():
                             ex = int(roi_x1 + end.x * roi_w)
                             ey = int(roi_y1 + end.y * roi_h)
 
-                            cv2.line(frame, (sx, sy), (ex, ey), SKELETON_LINE_COLOR, 2)
+                            draw_transparent_line(
+                                frame,
+                                (sx, sy),
+                                (ex, ey),
+                                SKELETON_LINE_COLOR,
+                                alpha=0.48,
+                                thickness=2
+                            )
 
-                        # skeleton 점
                         for idx in BODY_LANDMARKS:
                             lm = landmarks[idx]
                             px = int(roi_x1 + lm.x * roi_w)
                             py = int(roi_y1 + lm.y * roi_h)
-                            cv2.circle(frame, (px, py), 4, SKELETON_DOT_COLOR, -1)
 
-                # TARGET HUD
-                cv2.rectangle(
+                            draw_transparent_circle(
+                                frame,
+                                (px, py),
+                                4,
+                                SKELETON_DOT_COLOR,
+                                alpha=0.55
+                            )
+
+                draw_transparent_rect(
                     frame,
                     (x1, max(y1 - 85, 0)),
                     (x1 + 380, y1),
                     color,
-                    -1
+                    alpha=0.45,
+                    thickness=-1
                 )
 
                 cv2.putText(
@@ -529,10 +515,52 @@ def main():
                     2
                 )
 
-        # 중앙선
-        cv2.line(frame, (center_x, 0), (center_x, height), CENTER_LINE_COLOR, 1)
+        response_active = time.time() < response_state_until
 
-        # FPS 표시
+        system_state = estimate_system_state(
+            target_motion,
+            target_pose_state,
+            response_active
+        )
+
+        if system_state == "ENGAGE":
+            system_color = (0, 0, 255)
+        elif system_state == "CONDITION":
+            system_color = (0, 255, 255)
+        else:
+            system_color = (0, 255, 0)
+
+        draw_transparent_rect(
+            frame,
+            (20, 60),
+            (360, 100),
+            system_color,
+            alpha=0.45,
+            thickness=-1
+        )
+
+        cv2.putText(
+            frame,
+            f"SYSTEM / {system_state}",
+            (30, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            TEXT_COLOR,
+            2
+        )
+
+        if system_state == "ENGAGE":
+            draw_transparent_rect(frame, (0, 0), (width - 1, height - 1), (0, 0, 255), alpha=0.35, thickness=8)
+
+        draw_transparent_line(
+            frame,
+            (center_x, 0),
+            (center_x, height),
+            CENTER_LINE_COLOR,
+            alpha=0.35,
+            thickness=1
+        )
+
         current_time = time.time()
         fps = 1 / max(current_time - prev_time, 1e-6)
         prev_time = current_time
@@ -547,45 +575,11 @@ def main():
             2
         )
 
-        # 교전 상태 표시
-        response_active = time.time() < response_state_until
-
-        system_state = estimate_system_state(
-            target_motion,
-            target_pose_state,
-            response_active
-        )
-
-        if system_state == "ENGAGE":
-            system_color = (0, 0, 255)  # red
-        elif system_state == "CONDITION":
-            system_color = (0, 255, 255)  # yellow
-        else:
-            system_color = (0, 255, 0)  # green
-
-        cv2.rectangle(
-            frame,
-            (20, 60),
-            (360, 100),
-            system_color,
-            -1
-        )
-
-        cv2.putText(
-            frame,
-            f"SYSTEM / {system_state}",
-            (30, 88),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 0, 0),
-            2
-        )
-
-        # 출력 화면 확대
         display_frame = cv2.resize(frame, None, fx=1.5, fy=1.5)
         cv2.imshow("Threat Detection System", display_frame)
 
         key = cv2.waitKey(1)
+
         if key == 27:
             break
 
