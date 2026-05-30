@@ -58,7 +58,7 @@ def detect_punch_like_motion(wrist_history):
     )
 
     # 민감도 조정: 값이 낮을수록 더 쉽게 펀치로 판단
-    return max(left_move, right_move) > 0.22
+    return max(left_move, right_move) > 0.35
 
 
 # 움직임 + 자세 기반 위험도 점수 계산
@@ -96,6 +96,18 @@ def estimate_threat_score(target_motion, pose_state):
 
     return label, score
 
+# 상황 구분 (평상시, 주의, 교전)
+def estimate_system_state(target_motion, pose_state, response_active):
+    if response_active:
+        return "ENGAGE"
+
+    if target_motion == "APPROACHING":
+        return "CONDITION"
+
+    if pose_state in ["ARMS_RAISED", "GUARD_POSE"]:
+        return "CONDITION"
+
+    return "NORMAL"
 
 def main():
     # YOLO 사람 검출 모델
@@ -407,7 +419,7 @@ def main():
                         # 펀치 감지 후 일정 시간 유지
                         now = time.time()
 
-                        if detect_punch_like_motion(wrist_history):
+                        if raw_pose_state in ["GUARD_POSE", "ARMS_RAISED"] and detect_punch_like_motion(wrist_history):
                             punch_alert_until = now + PUNCH_ALERT_DURATION
                             response_state_until = now + RESPONSE_STATE_DURATION
 
@@ -535,28 +547,33 @@ def main():
             2
         )
 
-        if system_state == "RESPONSE":
-            system_color = (0, 0, 255)
+        # 교전 상태 표시
+        response_active = time.time() < response_state_until
+
+        system_state = estimate_system_state(
+            target_motion,
+            target_pose_state,
+            response_active
+        )
+
+        if system_state == "ENGAGE":
+            system_color = (0, 0, 255)  # red
+        elif system_state == "CONDITION":
+            system_color = (0, 255, 255)  # yellow
         else:
-            system_color = (0, 255, 0)
+            system_color = (0, 255, 0)  # green
 
         cv2.rectangle(
             frame,
             (20, 60),
-            (420, 100),
+            (360, 100),
             system_color,
             -1
         )
 
-        # 교전 상태 표시
-        system_state = "MONITORING"
-
-        if time.time() < response_state_until:
-            system_state = "RESPONSE"
-
         cv2.putText(
             frame,
-            f"SYSTEM STATE / {system_state}",
+            f"SYSTEM / {system_state}",
             (30, 88),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
