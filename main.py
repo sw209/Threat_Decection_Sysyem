@@ -153,6 +153,13 @@ def main():
     punch_alert_until = 0
     PUNCH_ALERT_DURATION = 1.5
 
+    # 공격 감지 후 상태
+    response_state_until = 0
+    RESPONSE_STATE_DURATION = 3.0
+    ## 공격 상태 이후 회피 감지
+    leaving_start_time = None
+    LEAVING_RELEASE_DURATION = 2.5
+
     # 설정값
     SMOOTHING_ALPHA = 0.7
     MOTION_HISTORY_SIZE = 5
@@ -253,6 +260,8 @@ def main():
             pose_history.clear()
             wrist_history.clear()
             punch_alert_until = 0
+            response_state_until = 0
+            leaving_start_time = None
 
         # 4. 가까운 인물 상위 N명 선정
         near_indices = sorted(
@@ -400,6 +409,24 @@ def main():
 
                         if detect_punch_like_motion(wrist_history):
                             punch_alert_until = now + PUNCH_ALERT_DURATION
+                            response_state_until = now + RESPONSE_STATE_DURATION
+
+                        now = time.time()
+
+                        if target_motion == "LEAVING":
+                            if leaving_start_time is None:
+                                leaving_start_time = now
+
+                            elif now - leaving_start_time >= LEAVING_RELEASE_DURATION:
+                                response_state_until = 0
+                                leaving_start_time = None
+
+                        else:
+                            leaving_start_time = None
+
+                        if time.time() < response_state_until:
+                            target_risk_label = "RESPONSE"
+                            target_risk_score = max(target_risk_score, 90)
 
                         if now < punch_alert_until:
                             raw_pose_state = "PUNCH_LIKE_MOTION"
@@ -417,6 +444,9 @@ def main():
                             target_motion,
                             target_pose_state
                         )
+                        if time.time() < response_state_until:
+                            target_risk_label = "RESPONSE"
+                            target_risk_score = max(target_risk_score, 90)
 
                         # skeleton 선
                         for start_idx, end_idx in BODY_CONNECTIONS:
@@ -502,6 +532,35 @@ def main():
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
             (0, 255, 255),
+            2
+        )
+
+        if system_state == "RESPONSE":
+            system_color = (0, 0, 255)
+        else:
+            system_color = (0, 255, 0)
+
+        cv2.rectangle(
+            frame,
+            (20, 60),
+            (420, 100),
+            system_color,
+            -1
+        )
+
+        # 교전 상태 표시
+        system_state = "MONITORING"
+
+        if time.time() < response_state_until:
+            system_state = "RESPONSE"
+
+        cv2.putText(
+            frame,
+            f"SYSTEM STATE / {system_state}",
+            (30, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 0),
             2
         )
 
