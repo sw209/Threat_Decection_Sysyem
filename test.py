@@ -1,4 +1,9 @@
-import mediapipe as mp
+import cv2
 
-print(mp)
-print(mp.__file__)
+for i in range(10):
+    cap = cv2.VideoCapture(i)
+
+    if cap.isOpened():
+        print(i)
+
+    cap.release()

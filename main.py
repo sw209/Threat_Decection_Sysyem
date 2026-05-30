@@ -146,7 +146,7 @@ def main():
     TEXT_COLOR = (0, 0, 0)
     CENTER_LINE_COLOR = (255, 255, 255)
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(2)
 
     if not cap.isOpened():
         print("[ERROR] 카메라를 열 수 없습니다.")
